@@ -278,7 +278,13 @@ local function match_anime()
 
     local function final_cb()
         if not matched then
-            msg.info("没有找到合适的匹配结果")
+            msg.info("所有主服务器无结果，尝试备用服务器搜索")
+            local title, season_num, episode_num = parse_title()
+            if title then
+                get_danmaku_fallback(title)
+            else
+                msg.info("没有找到合适的匹配结果")
+            end
         end
     end
 
@@ -354,7 +360,12 @@ local function match_file(file_path, file_name, callback)
 
     local function final_cb()
         if not matched then
-            callback("没有匹配的剧集")
+            msg.info("所有主服务器Hash匹配失败，尝试备用服务器搜索")
+            if file_name then
+                get_danmaku_fallback(file_name)
+            else
+                callback("没有匹配的剧集")
+            end
         end
     end
 
