@@ -54,23 +54,77 @@ function set_episode_id(input, from_menu, api_server)
     fetch_danmaku(episodeId, from_menu, selected_server)
 end
 
--- 回退使用额外的弹幕获取方式
+-- 回退使用额外的弹幕获取方式（与主服务器相同dandanplay协议）
 function get_danmaku_fallback(query)
-    local url = options.fallback_server .. "/?ac=dm&url=" .. query
-    msg.verbose("尝试获取弹幕：" .. url)
-
-    local args = make_danmaku_request_args("GET", url)
+    msg.info("开始使用备用服务器搜索: " .. query)
+    
+    local encoded_query = url_encode(query)
+    local search_url = options.fallback_server .. "/api/v2/search/anime?keyword=" .. encoded_query
+    local args = make_danmaku_request_args("GET", search_url)
+    
     if not args then return end
-
-    fetch_danmaku_data(args, function(data)
-        if not data or not data["comments"] or data["count"] <= 1 then
-            msg.info("备用服务器无数据或返回格式不正确")
-            show_message("备用服务器无数据或返回格式不正确", 3)
+    
+    call_cmd_async(args, function(error, json)
+        if error then
+            msg.error("备用服务器搜索失败: " .. tostring(error))
+            show_message("备用服务器搜索失败", 3)
             return
         end
-
-        save_danmaku_data(data["comments"], query, "user_custom")
-        load_danmaku(true)
+        
+        local data = utils.parse_json(json)
+        if not data or not data.animes or #data.animes == 0 then
+            msg.info("备用服务器无搜索结果")
+            show_message("备用服务器无搜索结果", 3)
+            return
+        end
+        
+        -- 与主服务器完全相同的匹配逻辑
+        local title, season_num, episode_num = parse_title()
+        local anime_type = "tvseries"
+        
+        if title:match("OVA") or title:match("OAD") then
+            anime_type = "ova"
+        end
+        
+        local local_candidates = {}
+        for _, anime in ipairs(data.animes) do
+            if anime.type == anime_type then
+                table.insert(local_candidates, anime)
+            end
+        end
+        
+        local best_match, best_score = nil, -1
+        local target_title = title
+        if tonumber(season_num) > 1 then
+            target_title = title .. " 第" .. number_to_chinese(season_num) .. "季"
+        end
+        
+        for _, anime in ipairs(local_candidates) do
+            local animeTitle = tostring(anime.animeTitle or "")
+            animeTitle = animeTitle:gsub("^%s*(.-)%s*$", "%1")
+                        :gsub("%s*%(.-%)%s*$", "")
+                        :gsub("%s*【.-】.*$", "")
+            
+            if animeTitle:match("第一[季部]") and tonumber(season_num) == 1 then
+                target_title = title .. " 第一季"
+            end
+            
+            local score = jaro_winkler(target_title, animeTitle)
+            msg.debug("备用服务器候选: " .. animeTitle .. " 相似度 " .. string.format("%.3f", score))
+            
+            if score > best_score then
+                best_score = score
+                best_match = anime
+            end
+        end
+        
+        if best_match and best_score >= 0.75 then
+            msg.info("备用服务器匹配成功: " .. best_match.animeTitle .. " (score=" .. string.format("%.2f", best_score) .. ")")
+            match_episode(best_match.animeTitle, best_match.bangumiId, episode_num, options.fallback_server)
+        else
+            msg.info("备用服务器没有符合匹配度的结果")
+            show_message("备用服务器没有符合匹配度的结果", 3)
+        end
     end)
 end
 
